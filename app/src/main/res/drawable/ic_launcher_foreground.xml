@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Minimal 3-row keyboard bars + music note motif -->
+    <path
+        android:fillColor="#CBE6FF"
+        android:pathData="M28,34h52a4,4 0 0,1 4,4v32a4,4 0 0,1 -4,4h-52a4,4 0 0,1 -4,-4v-32a4,4 0 0,1 4,-4z" />
+    <path
+        android:fillColor="#006494"
+        android:pathData="M34,38h8v20h-8z M46,38h8v20h-8z M58,38h8v20h-8z M70,38h4v20h-4z" />
+    <path
+        android:fillColor="#5ADBBF"
+        android:pathData="M30,63h48v5h-48z" />
+</vector>

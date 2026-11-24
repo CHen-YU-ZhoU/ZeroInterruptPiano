@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">零断奏钢琴</string>
+    <string name="notif_channel_name">悬浮琴房播放服务</string>
+    <string name="notif_title">零断奏钢琴正在待命</string>
+    <string name="notif_text">点击返回控制面板或调整悬浮校准与倍速</string>
+</resources>

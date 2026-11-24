@@ -1,0 +1,101 @@
+[
+  {
+    "file": "canon_in_d_full.json",
+    "id": "canon_in_d_full",
+    "title": "卡农（完整钢琴版）",
+    "diatonicPct": 98.9
+  },
+  {
+    "file": "canon_in_d_easy.json",
+    "id": "canon_in_d_easy",
+    "title": "卡农（简易畅弹版）",
+    "diatonicPct": 99.5
+  },
+  {
+    "file": "mozart_k331_tema.json",
+    "id": "mozart_k331_tema",
+    "title": "A大调奏鸣曲 K.331 主题",
+    "diatonicPct": 99.6
+  },
+  {
+    "file": "beethoven_ode_to_joy.json",
+    "id": "beethoven_ode_to_joy",
+    "title": "欢乐颂（钢琴改编）",
+    "diatonicPct": 99.2
+  },
+  {
+    "file": "bach_bwv117a.json",
+    "id": "bach_bwv117a",
+    "title": "小步舞曲 BWV 117a",
+    "diatonicPct": 98.3
+  },
+  {
+    "file": "brahms_waltz_op39_15.json",
+    "id": "brahms_waltz_op39_15",
+    "title": "圆舞曲 Op.39 No.15",
+    "diatonicPct": 96.9
+  },
+  {
+    "file": "castle_in_the_sky.json",
+    "file36": "castle_in_the_sky_36.json",
+    "id": "castle_in_the_sky",
+    "title": "天空之城（钢琴完整编配）",
+    "diatonicPct": 80.8
+  },
+  {
+    "file": "always_with_me.json",
+    "file36": "always_with_me_36.json",
+    "id": "always_with_me",
+    "title": "永远同在（千与千寻）",
+    "diatonicPct": 100.0
+  },
+  {
+    "file": "summer_kikujiro.json",
+    "file36": "summer_kikujiro_36.json",
+    "id": "summer_kikujiro",
+    "title": "夏日（菊次郎的夏天）",
+    "diatonicPct": 97.4
+  },
+  {
+    "file": "greensleeves_folk.json",
+    "file36": "greensleeves_folk_36.json",
+    "id": "greensleeves_folk",
+    "title": "绿袖子（钢琴独奏版）",
+    "diatonicPct": 94.4
+  },
+  {
+    "file": "my_heart_will_go_on.json",
+    "file36": "my_heart_will_go_on_36.json",
+    "id": "my_heart_will_go_on",
+    "title": "我心永恒（钢琴完整编配）",
+    "diatonicPct": 87.6
+  },
+  {
+    "file": "ballade_pour_adeline.json",
+    "file36": "ballade_pour_adeline_36.json",
+    "id": "ballade_pour_adeline",
+    "title": "水边的阿迪丽娜（完整钢琴版）",
+    "diatonicPct": 92.2
+  },
+  {
+    "file": "mariage_damour.json",
+    "file36": "mariage_damour_36.json",
+    "id": "mariage_damour",
+    "title": "梦中的婚礼（完整钢琴版）",
+    "diatonicPct": 96.9
+  },
+  {
+    "file": "river_flows_in_you.json",
+    "file36": "river_flows_in_you_36.json",
+    "id": "river_flows_in_you",
+    "title": "你的心河（完整钢琴版）",
+    "diatonicPct": 100.0
+  },
+  {
+    "file": "a_thousand_years.json",
+    "file36": "a_thousand_years_36.json",
+    "id": "a_thousand_years",
+    "title": "A Thousand Years（钢琴完整编配）",
+    "diatonicPct": 100.0
+  }
+]
