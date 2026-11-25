@@ -30,8 +30,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -40,7 +45,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,14 +55,19 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -66,6 +78,92 @@ data class ExpressiveOption<T>(
     val label: String,
     val icon: ImageVector? = null
 )
+
+/**
+ * Degree-7 (G3-continuous) high-order Bezier corner shape matching ZeroInterruptClicker's cards.
+ */
+class SmoothRoundedCornerShape(
+    private val cornerRadius: Dp
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline {
+        val w = size.width
+        val h = size.height
+        val rPx = with(density) { cornerRadius.toPx() }.coerceAtLeast(0f)
+        val r = minOf(rPx, w * 0.46f, h * 0.46f)
+        val path = Path()
+        if (r <= 0.5f || w <= 1f || h <= 1f) {
+            path.moveTo(0f, 0f)
+            path.lineTo(w, 0f)
+            path.lineTo(w, h)
+            path.lineTo(0f, h)
+            path.close()
+            return Outline.Generic(path)
+        }
+
+        val d = minOf(r * 1.50f, w * 0.495f, h * 0.495f)
+
+        path.moveTo(d, 0f)
+        path.lineTo(w - d, 0f)
+        for (i in 1..STEPS) {
+            path.lineTo(w - UNIT_X[i] * d, UNIT_Y[i] * d)
+        }
+
+        path.lineTo(w, h - d)
+        for (i in 1..STEPS) {
+            path.lineTo(w - UNIT_Y[i] * d, h - UNIT_X[i] * d)
+        }
+
+        path.lineTo(d, h)
+        for (i in 1..STEPS) {
+            path.lineTo(UNIT_X[i] * d, h - UNIT_Y[i] * d)
+        }
+
+        path.lineTo(0f, d)
+        for (i in 1..STEPS) {
+            path.lineTo(UNIT_Y[i] * d, UNIT_X[i] * d)
+        }
+
+        path.close()
+        return Outline.Generic(path)
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        return other is SmoothRoundedCornerShape && cornerRadius == other.cornerRadius
+    }
+
+    override fun hashCode(): Int = cornerRadius.hashCode()
+
+    private companion object {
+        const val STEPS = 28
+        val CTRL_X = doubleArrayOf(1.0, 0.75, 0.50, 0.25, 0.0, 0.0, 0.0, 0.0)
+        val CTRL_Y = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.25, 0.50, 0.75, 1.0)
+        val BINOM = doubleArrayOf(1.0, 7.0, 21.0, 35.0, 35.0, 21.0, 7.0, 1.0)
+
+        val UNIT_X = FloatArray(STEPS + 1)
+        val UNIT_Y = FloatArray(STEPS + 1)
+
+        init {
+            for (step in 0..STEPS) {
+                val t = step.toDouble() / STEPS
+                val omt = 1.0 - t
+                var sx = 0.0
+                var sy = 0.0
+                for (i in 0..7) {
+                    val b = BINOM[i] * Math.pow(t, i.toDouble()) * Math.pow(omt, (7 - i).toDouble())
+                    sx += b * CTRL_X[i]
+                    sy += b * CTRL_Y[i]
+                }
+                UNIT_X[step] = sx.toFloat()
+                UNIT_Y[step] = sy.toFloat()
+            }
+        }
+    }
+}
 
 /**
  * Material 3 Expressive Connected Button Group — unified with ZeroInterruptClicker:
@@ -198,7 +296,8 @@ fun ExpressiveSlider(
     floatingLabel: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    steps: Int = 0
+    steps: Int = 0,
+    compact: Boolean = false
 ) {
     val cs = MaterialTheme.colorScheme
     val interactionSource = remember { MutableInteractionSource() }
@@ -212,10 +311,15 @@ fun ExpressiveSlider(
         label = "sliderThumbW"
     )
     val thumbHeight by animateDpAsState(
-        targetValue = if (isInteracting) 32.dp else 26.dp,
+        targetValue = if (compact) {
+            if (isInteracting) 26.dp else 21.dp
+        } else {
+            if (isInteracting) 32.dp else 26.dp
+        },
         animationSpec = spring(dampingRatio = 0.72f, stiffness = 480f),
         label = "sliderThumbH"
     )
+    val trackHeight = if (compact) 11.dp else 14.dp
 
     val activeColor = if (enabled) cs.primary else cs.onSurface.copy(alpha = 0.28f)
     val inactiveColor = if (enabled) cs.secondaryContainer else cs.onSurface.copy(alpha = 0.12f)
@@ -229,13 +333,13 @@ fun ExpressiveSlider(
         steps = steps,
         enabled = enabled,
         interactionSource = interactionSource,
-        modifier = modifier.fillMaxWidth(),
+        modifier = if (compact) modifier.fillMaxWidth().height(28.dp) else modifier.fillMaxWidth(),
         thumb = {
             Box(contentAlignment = Alignment.Center) {
                 if (isInteracting && floatingLabel.isNotBlank()) {
                     Popup(
                         alignment = Alignment.TopCenter,
-                        offset = IntOffset(0, -105)
+                        offset = IntOffset(0, if (compact) -92 else -105)
                     ) {
                         AnimatedVisibility(
                             visible = isInteracting,
@@ -275,11 +379,11 @@ fun ExpressiveSlider(
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(14.dp)
+                    .height(trackHeight)
             ) {
                 val h = size.height
                 val w = size.width
-                val gapPx = 8.dp.toPx()
+                val gapPx = (if (compact) 6.dp else 8.dp).toPx()
                 val splitX = (w * fraction).coerceIn(0f, w)
                 val radius = CornerRadius(h * 0.5f, h * 0.5f)
 
@@ -305,7 +409,7 @@ fun ExpressiveSlider(
                     if (inactiveWidth > h * 0.6f) {
                         drawCircle(
                             color = stopDotColor,
-                            radius = 2.2.dp.toPx(),
+                            radius = (if (compact) 1.9.dp else 2.2.dp).toPx(),
                             center = Offset(w - h * 0.5f, h * 0.5f)
                         )
                     }
@@ -417,4 +521,135 @@ fun CheckSwitch(
         enabled = enabled,
         thumbContent = null
     )
+}
+
+@Immutable
+data class OverflowMenuAction(
+    val label: String,
+    val badge: String? = null,
+    val badgeHighlight: Boolean = false,
+    val enabled: Boolean = true,
+    val isDestructive: Boolean = false,
+    val onClick: () -> Unit
+)
+
+/**
+ * Clean Material 3 single-line top bar matching ZeroInterruptClicker's PageTopHeader:
+ * large page title on the left, optional trailing action, and optional 3-dot overflow menu.
+ */
+@Composable
+fun PageTopHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    menuActions: List<OverflowMenuAction> = emptyList(),
+    showMenuAlertDot: Boolean = false,
+    trailingAction: (@Composable () -> Unit)? = null
+) {
+    val cs = MaterialTheme.colorScheme
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(48.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = cs.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (trailingAction != null) {
+                trailingAction()
+            }
+            if (menuActions.isNotEmpty()) {
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "更多",
+                                tint = cs.onSurfaceVariant
+                            )
+                            if (showMenuAlertDot) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(cs.error)
+                                )
+                            }
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = cs.surfaceContainerHigh
+                    ) {
+                        menuActions.forEach { item ->
+                            DropdownMenuItem(
+                                enabled = item.enabled,
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = item.label,
+                                            color = if (item.isDestructive && item.enabled) {
+                                                cs.error
+                                            } else {
+                                                Color.Unspecified
+                                            }
+                                        )
+                                        if (!item.badge.isNullOrBlank()) {
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = if (item.badgeHighlight) {
+                                                    cs.errorContainer
+                                                } else {
+                                                    cs.secondaryContainer
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = item.badge,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = if (item.badgeHighlight) {
+                                                        cs.onErrorContainer
+                                                    } else {
+                                                        cs.onSecondaryContainer
+                                                    },
+                                                    modifier = Modifier.padding(
+                                                        horizontal = 7.dp,
+                                                        vertical = 2.dp
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    item.onClick()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
