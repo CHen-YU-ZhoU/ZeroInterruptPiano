@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
 import com.zerointerrupt.piano.model.CalibrationGrid
+import com.zerointerrupt.piano.model.CalibrationMethod
 import com.zerointerrupt.piano.model.KeyboardMode
 import kotlin.math.hypot
 import kotlin.math.max
@@ -28,6 +29,7 @@ class CalibrationGridView(
     private val onAuditionKey: (keyId: String, grid: CalibrationGrid) -> Unit,
     private val onSaveGrid: (CalibrationGrid) -> Unit,
     private val onResetGrid: () -> CalibrationGrid,
+    private val onSwitchToManualPick: () -> Unit = {},
     private val onCancel: () -> Unit
 ) : View(context) {
 
@@ -45,6 +47,7 @@ class CalibrationGridView(
 
     private val boxRect = RectF()
     private val toolbarRect = RectF()
+    private val btnManualRect = RectF()
     private val btnResetRect = RectF()
     private val btnSaveRect = RectF()
     private val btnCancelRect = RectF()
@@ -102,7 +105,7 @@ class CalibrationGridView(
     }
 
     private enum class DragTarget {
-        NONE, MOVE_BOX, RESIZE_TL, RESIZE_BR, BUTTON_RESET, BUTTON_SAVE, BUTTON_CANCEL, CELL_TAP
+        NONE, MOVE_BOX, RESIZE_TL, RESIZE_BR, BUTTON_MANUAL, BUTTON_RESET, BUTTON_SAVE, BUTTON_CANCEL, CELL_TAP
     }
 
     private var dragTarget = DragTarget.NONE
@@ -191,21 +194,23 @@ class CalibrationGridView(
         handleBR.set(boxRect.right - hr, boxRect.bottom - hr, boxRect.right + hr, boxRect.bottom + hr)
 
         // Position toolbar directly above grid (or below if grid is near top)
-        val tbW = dp(340f).coerceAtMost(w - dp(24f))
+        val tbW = dp(380f).coerceAtMost(w - dp(20f))
         val tbH = dp(44f)
-        val cx = boxRect.centerX().coerceIn(tbW / 2f + dp(12f), w - tbW / 2f - dp(12f))
+        val cx = boxRect.centerX().coerceIn(tbW / 2f + dp(10f), w - tbW / 2f - dp(10f))
         val preferTop = boxRect.top - tbH - dp(14f)
         val tbTop = if (preferTop >= dp(12f)) preferTop else min(h - tbH - dp(12f), boxRect.bottom + dp(14f))
         toolbarRect.set(cx - tbW / 2f, tbTop, cx + tbW / 2f, tbTop + tbH)
 
-        val pad = dp(6f)
-        val btnW = dp(64f)
-        val saveW = dp(82f)
+        val pad = dp(5f)
+        val btnW = dp(54f)
+        val manualW = dp(68f)
+        val saveW = dp(64f)
         val bTop = toolbarRect.top + pad
         val bBtm = toolbarRect.bottom - pad
         btnCancelRect.set(toolbarRect.right - pad - btnW, bTop, toolbarRect.right - pad, bBtm)
         btnSaveRect.set(btnCancelRect.left - pad - saveW, bTop, btnCancelRect.left - pad, bBtm)
         btnResetRect.set(btnSaveRect.left - pad - btnW, bTop, btnSaveRect.left - pad, bBtm)
+        btnManualRect.set(btnResetRect.left - pad - manualW, bTop, btnResetRect.left - pad, bBtm)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -263,11 +268,18 @@ class CalibrationGridView(
         // Floating MD3 toolbar pill
         canvas.drawRoundRect(toolbarRect, dp(22f), dp(22f), pillBgPaint)
         canvas.drawRoundRect(toolbarRect, dp(22f), dp(22f), pillStrokePaint)
-        val hintCenterX = (toolbarRect.left + btnResetRect.left) * 0.5f
+        val hintCenterX = (toolbarRect.left + btnManualRect.left) * 0.5f
         val textCenterY = toolbarRect.centerY() - (hintPaint.descent() + hintPaint.ascent()) * 0.5f
-        canvas.drawText("拖动对齐 · 点键试音", hintCenterX, textCenterY, hintPaint)
+        if (btnManualRect.left - toolbarRect.left >= dp(64f)) {
+            canvas.drawText("拖动对齐 · 试音", hintCenterX, textCenterY, hintPaint)
+        }
 
         val btnCy = btnSaveRect.centerY() - (btnTextPaint.descent() + btnTextPaint.ascent()) * 0.5f
+
+        pillBtnPaint.color = palette.tertiaryContainer
+        btnTextPaint.color = palette.onTertiaryContainer
+        canvas.drawRoundRect(btnManualRect, dp(16f), dp(16f), pillBtnPaint)
+        canvas.drawText("手动拾取", btnManualRect.centerX(), btnCy, btnTextPaint)
 
         pillBtnPaint.color = palette.secondaryContainer
         btnTextPaint.color = palette.onSecondaryContainer
@@ -306,6 +318,7 @@ class CalibrationGridView(
                     btnCancelRect.contains(x, y) -> DragTarget.BUTTON_CANCEL
                     btnSaveRect.contains(x, y) -> DragTarget.BUTTON_SAVE
                     btnResetRect.contains(x, y) -> DragTarget.BUTTON_RESET
+                    btnManualRect.contains(x, y) -> DragTarget.BUTTON_MANUAL
                     toolbarRect.contains(x, y) -> DragTarget.MOVE_BOX
                     handleBR.contains(x, y) -> DragTarget.RESIZE_BR
                     handleTL.contains(x, y) -> DragTarget.RESIZE_TL
@@ -361,7 +374,8 @@ class CalibrationGridView(
                 if (!movedBeyondSlop) {
                     when (dragTarget) {
                         DragTarget.BUTTON_CANCEL -> onCancel()
-                        DragTarget.BUTTON_SAVE -> onSaveGrid(grid)
+                        DragTarget.BUTTON_MANUAL -> onSwitchToManualPick()
+                        DragTarget.BUTTON_SAVE -> onSaveGrid(grid.copy(calibrationMethod = CalibrationMethod.GRID))
                         DragTarget.BUTTON_RESET -> {
                             grid = onResetGrid().clamped()
                             invalidate()
@@ -369,7 +383,7 @@ class CalibrationGridView(
                         DragTarget.CELL_TAP -> {
                             tappedKeyId?.let { k ->
                                 flashKey(k)
-                                onAuditionKey(k, grid)
+                                onAuditionKey(k, grid.copy(calibrationMethod = CalibrationMethod.GRID))
                             }
                         }
                         else -> Unit

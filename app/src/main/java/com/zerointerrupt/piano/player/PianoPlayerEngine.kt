@@ -11,6 +11,7 @@ import com.zerointerrupt.piano.converter.ClickBundleExporter
 import com.zerointerrupt.piano.converter.ExportBundleSummary
 import com.zerointerrupt.piano.converter.ScoreConverter
 import com.zerointerrupt.piano.model.CalibrationGrid
+import com.zerointerrupt.piano.model.CalibrationProfile
 import com.zerointerrupt.piano.model.KeyboardMode
 import com.zerointerrupt.piano.model.PianoConfigStore
 import com.zerointerrupt.piano.model.PianoNoteEvent
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.InputStream
+import java.util.UUID
 import kotlin.math.max
 import kotlin.math.roundToLong
 
@@ -75,6 +77,21 @@ object PianoPlayerEngine {
     private val _calibration = MutableStateFlow(CalibrationGrid())
     val calibration: StateFlow<CalibrationGrid> = _calibration.asStateFlow()
 
+    private val _calibrationProfiles = MutableStateFlow<List<CalibrationProfile>>(
+        listOf(CalibrationProfile(CalibrationProfile.DEFAULT_PROFILE_ID, CalibrationProfile.DEFAULT_PROFILE_NAME))
+    )
+    val calibrationProfiles: StateFlow<List<CalibrationProfile>> = _calibrationProfiles.asStateFlow()
+
+    private val _activeCalibrationProfileId = MutableStateFlow(CalibrationProfile.DEFAULT_PROFILE_ID)
+    val activeCalibrationProfileId: StateFlow<String> = _activeCalibrationProfileId.asStateFlow()
+
+    fun currentCalibrationProfile(): CalibrationProfile {
+        val id = _activeCalibrationProfileId.value
+        val list = _calibrationProfiles.value
+        return list.firstOrNull { it.id == id } ?: list.firstOrNull()
+            ?: CalibrationProfile(CalibrationProfile.DEFAULT_PROFILE_ID, CalibrationProfile.DEFAULT_PROFILE_NAME, _settings.value.keyboardMode, _calibration.value)
+    }
+
     private val _probeState = MutableStateFlow<RpcConnectionProbe?>(null)
     val probeState: StateFlow<RpcConnectionProbe?> = _probeState.asStateFlow()
 
@@ -94,12 +111,16 @@ object PianoPlayerEngine {
         appContext = context.applicationContext
         PianoConfigStore.ensureMidiDirectories(appContext)
         val loadedSettings = PianoConfigStore.loadSettings(appContext)
-        val loadedCal = PianoConfigStore.loadCalibration(appContext)
+        val loadedProfiles = PianoConfigStore.loadCalibrationProfiles(appContext)
+        val savedActiveId = PianoConfigStore.loadActiveCalibrationProfileId(appContext)
+        val activeProfile = loadedProfiles.firstOrNull { it.id == savedActiveId } ?: loadedProfiles.first()
         val loadedScores = PianoConfigStore.loadAllScores(appContext, loadedSettings.keyboardMode)
 
         _settings.value = loadedSettings
         liveSpeed = loadedSettings.speedMultiplier
-        _calibration.value = loadedCal
+        _calibrationProfiles.value = loadedProfiles
+        _activeCalibrationProfileId.value = activeProfile.id
+        _calibration.value = activeProfile.grid.clamped()
         _scores.value = loadedScores
 
         val match = loadedScores.firstOrNull { it.id == loadedSettings.selectedScoreId }
@@ -155,15 +176,129 @@ object PianoPlayerEngine {
     }
 
     fun saveCalibration(grid: CalibrationGrid) {
+        val active = currentCalibrationProfile()
+        saveCalibrationProfile(
+            grid = grid,
+            name = active.name,
+            saveAsNew = false,
+            keyboardMode = _settings.value.keyboardMode
+        )
+    }
+
+    fun saveCalibrationProfile(
+        grid: CalibrationGrid,
+        name: String,
+        saveAsNew: Boolean,
+        keyboardMode: KeyboardMode = _settings.value.keyboardMode
+    ): CalibrationProfile {
         val clamped = grid.clamped()
+        val cleanName = name.trim().take(24).ifBlank { CalibrationProfile.DEFAULT_PROFILE_NAME }
+        val currentList = _calibrationProfiles.value
+        val activeId = _activeCalibrationProfileId.value
+        val now = System.currentTimeMillis()
+
+        val resultProfile: CalibrationProfile
+        val updatedList: List<CalibrationProfile>
+        if (saveAsNew || currentList.none { it.id == activeId }) {
+            resultProfile = CalibrationProfile(
+                id = "cal_${now}_${UUID.randomUUID().toString().take(6)}",
+                name = cleanName,
+                keyboardMode = keyboardMode,
+                grid = clamped,
+                updatedAtMs = now
+            )
+            updatedList = currentList + resultProfile
+        } else {
+            resultProfile = CalibrationProfile(
+                id = activeId,
+                name = cleanName,
+                keyboardMode = keyboardMode,
+                grid = clamped,
+                updatedAtMs = now
+            )
+            updatedList = currentList.map { if (it.id == activeId) resultProfile else it }
+        }
+
+        _calibrationProfiles.value = updatedList
+        _activeCalibrationProfileId.value = resultProfile.id
         _calibration.value = clamped
         if (::appContext.isInitialized) {
+            PianoConfigStore.saveCalibrationProfiles(appContext, updatedList)
+            PianoConfigStore.saveActiveCalibrationProfileId(appContext, resultProfile.id)
             PianoConfigStore.saveCalibration(appContext, clamped)
+        }
+        return resultProfile
+    }
+
+    fun selectCalibrationProfile(profileId: String, syncKeyboardMode: Boolean = true): CalibrationProfile? {
+        val match = _calibrationProfiles.value.firstOrNull { it.id == profileId } ?: return null
+        _activeCalibrationProfileId.value = match.id
+        _calibration.value = match.grid.clamped()
+        if (::appContext.isInitialized) {
+            PianoConfigStore.saveActiveCalibrationProfileId(appContext, match.id)
+            PianoConfigStore.saveCalibration(appContext, match.grid)
+        }
+        if (syncKeyboardMode && _settings.value.keyboardMode != match.keyboardMode) {
+            setKeyboardMode(match.keyboardMode)
+        }
+        return match
+    }
+
+    fun createCalibrationProfile(
+        name: String,
+        copyFromActive: Boolean,
+        keyboardMode: KeyboardMode = _settings.value.keyboardMode
+    ): CalibrationProfile {
+        val baseGrid = if (copyFromActive) _calibration.value else CalibrationGrid()
+        return saveCalibrationProfile(
+            grid = baseGrid,
+            name = name,
+            saveAsNew = true,
+            keyboardMode = keyboardMode
+        )
+    }
+
+    fun renameCalibrationProfile(profileId: String, newName: String) {
+        val cleanName = newName.trim().take(24)
+        if (cleanName.isBlank()) return
+        val updated = _calibrationProfiles.value.map {
+            if (it.id == profileId) it.copy(name = cleanName, updatedAtMs = System.currentTimeMillis()) else it
+        }
+        _calibrationProfiles.value = updated
+        if (::appContext.isInitialized) {
+            PianoConfigStore.saveCalibrationProfiles(appContext, updated)
         }
     }
 
+    fun deleteCalibrationProfile(profileId: String): Boolean {
+        val list = _calibrationProfiles.value
+        if (list.size <= 1) return false
+        val remaining = list.filterNot { it.id == profileId }
+        if (remaining.size == list.size) return false
+        _calibrationProfiles.value = remaining
+        val nextActive = if (_activeCalibrationProfileId.value == profileId) {
+            remaining.first()
+        } else {
+            remaining.firstOrNull { it.id == _activeCalibrationProfileId.value } ?: remaining.first()
+        }
+        _activeCalibrationProfileId.value = nextActive.id
+        _calibration.value = nextActive.grid.clamped()
+        if (::appContext.isInitialized) {
+            PianoConfigStore.saveCalibrationProfiles(appContext, remaining)
+            PianoConfigStore.saveActiveCalibrationProfileId(appContext, nextActive.id)
+            PianoConfigStore.saveCalibration(appContext, nextActive.grid)
+        }
+        return true
+    }
+
     fun resetCalibration() {
-        saveCalibration(CalibrationGrid())
+        val active = currentCalibrationProfile()
+        saveCalibrationProfile(
+            grid = CalibrationGrid(),
+            name = active.name,
+            saveAsNew = false,
+            keyboardMode = _settings.value.keyboardMode
+        )
     }
 
     fun setOverlayMode(mode: OverlayMode) {

@@ -15,11 +15,15 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.zerointerrupt.piano.R
 import com.zerointerrupt.piano.model.CalibrationGrid
+import com.zerointerrupt.piano.model.CalibrationMethod
+import com.zerointerrupt.piano.model.CalibrationProfile
+import com.zerointerrupt.piano.model.KeyboardMode
 import com.zerointerrupt.piano.model.PianoScore
 import com.zerointerrupt.piano.model.PianoSettings
 import com.zerointerrupt.piano.player.OverlayMode
@@ -40,7 +44,9 @@ class PianoOverlayService : Service() {
         val scores: List<PianoScore>,
         val selectedScore: PianoScore?,
         val snapshot: PlaybackSnapshot,
-        val settings: PianoSettings
+        val settings: PianoSettings,
+        val profiles: List<CalibrationProfile>,
+        val activeProfileId: String
     )
 
     private lateinit var windowManager: WindowManager
@@ -53,6 +59,11 @@ class PianoOverlayService : Service() {
     private var calibrationView: CalibrationGridView? = null
     private var calibrationLp: WindowManager.LayoutParams? = null
 
+    private var manualCalibrationView: ManualCalibrationView? = null
+    private var manualCalibrationLp: WindowManager.LayoutParams? = null
+
+    private var saveOverlayView: CalibrationSaveOverlayView? = null
+
     private var currentPalette: OverlayMd3Palette? = null
     private var stateCollectJob: Job? = null
     private var restoreTouchRunnable: Runnable? = null
@@ -64,22 +75,36 @@ class PianoOverlayService : Service() {
         startForegroundWithNotification()
 
         stateCollectJob = serviceScope.launch {
+            val profileFlow = combine(
+                PianoPlayerEngine.calibrationProfiles,
+                PianoPlayerEngine.activeCalibrationProfileId
+            ) { profiles, activeId -> profiles to activeId }
+
             combine(
                 PianoPlayerEngine.scores,
                 PianoPlayerEngine.selectedScore,
                 PianoPlayerEngine.playback,
-                PianoPlayerEngine.settings
-            ) { scores, selected, snapshot, settings ->
-                OverlayUiState(scores, selected, snapshot, settings)
+                PianoPlayerEngine.settings,
+                profileFlow
+            ) { scores, selected, snapshot, settings, (profiles, activeId) ->
+                OverlayUiState(scores, selected, snapshot, settings, profiles, activeId)
             }.collect { ui ->
                 val nextPalette = resolveCurrentPalette(ui.settings)
                 if (nextPalette != currentPalette) {
                     currentPalette = nextPalette
                     playerBarView?.applyPalette(nextPalette)
                     calibrationView?.applyPalette(nextPalette)
+                    manualCalibrationView?.applyPalette(nextPalette)
                 }
                 calibrationView?.setKeyboardMode(ui.settings.keyboardMode)
-                playerBarView?.updateState(ui.scores, ui.selectedScore, ui.snapshot, ui.settings.keyboardMode)
+                playerBarView?.updateState(
+                    ui.scores,
+                    ui.selectedScore,
+                    ui.snapshot,
+                    ui.settings.keyboardMode,
+                    ui.profiles,
+                    ui.activeProfileId
+                )
             }
         }
     }
@@ -94,6 +119,9 @@ class PianoOverlayService : Service() {
             }
             ACTION_SHOW_CALIBRATION -> {
                 showCalibrationOverlay()
+            }
+            ACTION_SHOW_MANUAL_CALIBRATION -> {
+                showManualCalibrationOverlay()
             }
             ACTION_SHOW_PLAYER -> {
                 showPlayerBarOverlay()
@@ -112,9 +140,11 @@ class PianoOverlayService : Service() {
             currentPalette = nextPalette
             playerBarView?.applyPalette(nextPalette)
             calibrationView?.applyPalette(nextPalette)
+            manualCalibrationView?.applyPalette(nextPalette)
         }
         clampPlayerBarIntoBounds()
         calibrationView?.invalidate()
+        manualCalibrationView?.invalidate()
     }
 
     private fun resolveCurrentPalette(
@@ -124,7 +154,9 @@ class PianoOverlayService : Service() {
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
         stateCollectJob?.cancel()
+        removeSaveOverlay()
         removeCalibrationOverlay()
+        removeManualCalibrationOverlay()
         removePlayerBarOverlay()
         PianoPlayerEngine.setOverlayMode(OverlayMode.OFF)
         serviceScope.cancel()
@@ -214,7 +246,9 @@ class PianoOverlayService : Service() {
     }
 
     private fun showPlayerBarOverlay() {
+        removeSaveOverlay()
         removeCalibrationOverlay()
+        removeManualCalibrationOverlay()
         if (playerBarView != null) {
             PianoPlayerEngine.setOverlayMode(OverlayMode.PLAYER_BAR)
             return
@@ -248,6 +282,13 @@ class PianoOverlayService : Service() {
             onAdjustSpeed = { sp -> PianoPlayerEngine.setSpeed(sp) },
             onSelectScore = { scoreId -> PianoPlayerEngine.selectScore(scoreId) },
             onOpenCalibration = { showCalibrationOverlay() },
+            onOpenManualCalibration = { showManualCalibrationOverlay() },
+            onSelectCalibrationProfile = { profileId ->
+                val switched = PianoPlayerEngine.selectCalibrationProfile(profileId)
+                if (switched != null) {
+                    Toast.makeText(this, "已切换校准方案「${switched.name}」", Toast.LENGTH_SHORT).show()
+                }
+            },
             onCloseOverlay = {
                 PianoPlayerEngine.stop()
                 stopSelf()
@@ -257,10 +298,10 @@ class PianoOverlayService : Service() {
             },
             onToggleKeyboardMode = {
                 val cur = PianoPlayerEngine.settings.value.keyboardMode
-                val next = if (cur == com.zerointerrupt.piano.model.KeyboardMode.KEYS_36) {
-                    com.zerointerrupt.piano.model.KeyboardMode.KEYS_21
+                val next = if (cur == KeyboardMode.KEYS_36) {
+                    KeyboardMode.KEYS_21
                 } else {
-                    com.zerointerrupt.piano.model.KeyboardMode.KEYS_36
+                    KeyboardMode.KEYS_36
                 }
                 PianoPlayerEngine.setKeyboardMode(next)
             }
@@ -269,7 +310,9 @@ class PianoOverlayService : Service() {
             PianoPlayerEngine.scores.value,
             PianoPlayerEngine.selectedScore.value,
             PianoPlayerEngine.playback.value,
-            PianoPlayerEngine.settings.value.keyboardMode
+            PianoPlayerEngine.settings.value.keyboardMode,
+            PianoPlayerEngine.calibrationProfiles.value,
+            PianoPlayerEngine.activeCalibrationProfileId.value
         )
         windowManager.addView(bar, lp)
         playerBarView = bar
@@ -278,7 +321,9 @@ class PianoOverlayService : Service() {
     }
 
     private fun showCalibrationOverlay() {
+        removeSaveOverlay()
         removePlayerBarOverlay()
+        removeManualCalibrationOverlay()
         if (calibrationView != null) {
             PianoPlayerEngine.setOverlayMode(OverlayMode.CALIBRATION)
             return
@@ -295,18 +340,23 @@ class PianoOverlayService : Service() {
             initialPalette = palette,
             initialKeyboardMode = PianoPlayerEngine.settings.value.keyboardMode,
             onAuditionKey = { keyId, liveGrid ->
-                triggerAuditionTapPassThrough(keyId, liveGrid)
+                triggerAuditionTapPassThrough(calibrationView, calibrationLp, keyId, liveGrid)
             },
             onSaveGrid = { saved ->
-                PianoPlayerEngine.saveCalibration(saved)
-                Toast.makeText(this, "3×7 校准坐标已保存", Toast.LENGTH_SHORT).show()
-                showPlayerBarOverlay()
+                val mode = PianoPlayerEngine.settings.value.keyboardMode
+                showSaveCalibrationDialog(
+                    grid = saved.copy(calibrationMethod = CalibrationMethod.GRID),
+                    mode = mode,
+                    subtitle = "${mode.label} · 网格框选布局"
+                )
             },
             onResetGrid = {
                 val def = CalibrationGrid()
-                PianoPlayerEngine.saveCalibration(def)
                 Toast.makeText(this, "已重置为默认 3×7 布局", Toast.LENGTH_SHORT).show()
                 def
+            },
+            onSwitchToManualPick = {
+                showManualCalibrationOverlay()
             },
             onCancel = {
                 showPlayerBarOverlay()
@@ -318,13 +368,127 @@ class PianoOverlayService : Service() {
         PianoPlayerEngine.setOverlayMode(OverlayMode.CALIBRATION)
     }
 
+    private fun showManualCalibrationOverlay() {
+        removeSaveOverlay()
+        removePlayerBarOverlay()
+        removeCalibrationOverlay()
+        if (manualCalibrationView != null) {
+            PianoPlayerEngine.setOverlayMode(OverlayMode.CALIBRATION)
+            return
+        }
+        val palette = resolveCurrentPalette().also { currentPalette = it }
+        val activeProfile = PianoPlayerEngine.currentCalibrationProfile()
+        val lp = createOverlayParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            fullscreenLayout = true
+        )
+        val view = ManualCalibrationView(
+            context = this,
+            initialGrid = PianoPlayerEngine.calibration.value,
+            initialPalette = palette,
+            initialKeyboardMode = PianoPlayerEngine.settings.value.keyboardMode,
+            initialProfileName = activeProfile.name,
+            onAuditionKey = { keyId, liveGrid ->
+                triggerAuditionTapPassThrough(manualCalibrationView, manualCalibrationLp, keyId, liveGrid)
+            },
+            onRequestSave = { pickedGrid, mode ->
+                val pickedCount = CalibrationGrid.pickOrderFor(mode).count { it in pickedGrid.manualPoints }
+                showSaveCalibrationDialog(
+                    grid = pickedGrid,
+                    mode = mode,
+                    subtitle = "${mode.label} · 手动拾取 ($pickedCount/${mode.keyCount} 键)"
+                )
+            },
+            onSwitchToGridMode = {
+                showCalibrationOverlay()
+            },
+            onCancel = {
+                showPlayerBarOverlay()
+            }
+        )
+        windowManager.addView(view, lp)
+        manualCalibrationView = view
+        manualCalibrationLp = lp
+        PianoPlayerEngine.setOverlayMode(OverlayMode.CALIBRATION)
+    }
+
+    private fun showSaveCalibrationDialog(
+        grid: CalibrationGrid,
+        mode: KeyboardMode,
+        subtitle: String
+    ) {
+        removeSaveOverlay()
+        val palette = resolveCurrentPalette().also { currentPalette = it }
+        val activeProfile = PianoPlayerEngine.currentCalibrationProfile()
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
+        val dialog = CalibrationSaveOverlayView(
+            context = this,
+            palette = palette,
+            currentProfileName = activeProfile.name,
+            subtitle = subtitle,
+            onSaveOverwrite = { name ->
+                val saved = PianoPlayerEngine.saveCalibrationProfile(
+                    grid = grid,
+                    name = name,
+                    saveAsNew = false,
+                    keyboardMode = mode
+                )
+                if (PianoPlayerEngine.settings.value.keyboardMode != mode) {
+                    PianoPlayerEngine.setKeyboardMode(mode)
+                }
+                Toast.makeText(this, "已更新校准方案「${saved.name}」", Toast.LENGTH_SHORT).show()
+                removeSaveOverlay()
+                showPlayerBarOverlay()
+            },
+            onSaveAsNew = { name ->
+                val saved = PianoPlayerEngine.saveCalibrationProfile(
+                    grid = grid,
+                    name = name,
+                    saveAsNew = true,
+                    keyboardMode = mode
+                )
+                if (PianoPlayerEngine.settings.value.keyboardMode != mode) {
+                    PianoPlayerEngine.setKeyboardMode(mode)
+                }
+                Toast.makeText(this, "已另存为新方案「${saved.name}」", Toast.LENGTH_SHORT).show()
+                removeSaveOverlay()
+                showPlayerBarOverlay()
+            },
+            onCancel = {
+                removeSaveOverlay()
+            }
+        )
+        windowManager.addView(dialog, lp)
+        saveOverlayView = dialog
+    }
+
     /**
-     * Temporarily marks CalibrationGridView as FLAG_NOT_TOUCHABLE so the injected uinput tap
+     * Temporarily marks the active calibration overlay as FLAG_NOT_TOUCHABLE so the injected uinput tap
      * passes straight through to the game window underneath instead of hitting this overlay.
      */
-    private fun triggerAuditionTapPassThrough(keyId: String, liveGrid: CalibrationGrid) {
-        val view = calibrationView ?: return
-        val lp = calibrationLp ?: return
+    private fun triggerAuditionTapPassThrough(
+        targetView: View?,
+        targetLp: WindowManager.LayoutParams?,
+        keyId: String,
+        liveGrid: CalibrationGrid
+    ) {
+        val view = targetView ?: return
+        val lp = targetLp ?: return
         restoreTouchRunnable?.let { mainHandler.removeCallbacks(it) }
 
         lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -348,11 +512,16 @@ class PianoOverlayService : Service() {
         }, 24L)
 
         val restore = Runnable {
-            val v = calibrationView ?: return@Runnable
-            val curLp = calibrationLp ?: return@Runnable
-            curLp.flags = curLp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            val activeView = when {
+                view === calibrationView -> calibrationView
+                view === manualCalibrationView -> manualCalibrationView
+                else -> null
+            } ?: return@Runnable
+            val activeLp = if (activeView === calibrationView) calibrationLp else manualCalibrationLp
+            if (activeLp == null) return@Runnable
+            activeLp.flags = activeLp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             try {
-                windowManager.updateViewLayout(v, curLp)
+                windowManager.updateViewLayout(activeView, activeLp)
             } catch (_: Throwable) {
             }
         }
@@ -398,12 +567,36 @@ class PianoOverlayService : Service() {
         calibrationLp = null
     }
 
+    private fun removeManualCalibrationOverlay() {
+        restoreTouchRunnable?.let { mainHandler.removeCallbacks(it) }
+        restoreTouchRunnable = null
+        manualCalibrationView?.let { v ->
+            try {
+                windowManager.removeViewImmediate(v)
+            } catch (_: Throwable) {
+            }
+        }
+        manualCalibrationView = null
+        manualCalibrationLp = null
+    }
+
+    private fun removeSaveOverlay() {
+        saveOverlayView?.let { v ->
+            try {
+                windowManager.removeViewImmediate(v)
+            } catch (_: Throwable) {
+            }
+        }
+        saveOverlayView = null
+    }
+
     companion object {
         private const val CHANNEL_ID = "zero_interrupt_piano_overlay"
         private const val NOTIFICATION_ID = 2001
 
         const val ACTION_SHOW_PLAYER = "com.zerointerrupt.piano.SHOW_PLAYER"
         const val ACTION_SHOW_CALIBRATION = "com.zerointerrupt.piano.SHOW_CALIBRATION"
+        const val ACTION_SHOW_MANUAL_CALIBRATION = "com.zerointerrupt.piano.SHOW_MANUAL_CALIBRATION"
         const val ACTION_STOP_ALL = "com.zerointerrupt.piano.STOP_ALL"
     }
 }

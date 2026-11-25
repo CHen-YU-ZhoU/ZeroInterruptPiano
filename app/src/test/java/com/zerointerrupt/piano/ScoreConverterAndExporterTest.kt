@@ -3,6 +3,9 @@ package com.zerointerrupt.piano
 import com.zerointerrupt.piano.converter.ClickBundleExporter
 import com.zerointerrupt.piano.converter.ScoreConverter
 import com.zerointerrupt.piano.model.CalibrationGrid
+import com.zerointerrupt.piano.model.CalibrationMethod
+import com.zerointerrupt.piano.model.CalibrationProfile
+import com.zerointerrupt.piano.model.KeyboardMode
 import com.zerointerrupt.piano.model.PianoSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -109,5 +112,36 @@ class ScoreConverterAndExporterTest {
         assertTrue(parsed != null)
         assertEquals(36, parsed!!.targetKeyCount)
         assertEquals("test_chromatic", parsed.id)
+    }
+
+    @Test
+    fun manualCalibrationProfileRoundTripAndKeyLookupWork() {
+        assertEquals(21, CalibrationGrid.PICK_ORDER_21.size)
+        assertEquals(36, CalibrationGrid.PICK_ORDER_36.size)
+        assertEquals(listOf("L1", "L1S", "L2", "L2S", "L3"), CalibrationGrid.PICK_ORDER_36.take(5))
+        assertEquals("低音 #2", CalibrationGrid.formatKeyWithOctave("L2S"))
+
+        val manualGrid = CalibrationGrid(
+            calibrationMethod = CalibrationMethod.MANUAL_PICK,
+            manualPoints = mapOf(
+                "L1" to Pair(0.12f, 0.85f),
+                "L2S" to Pair(0.24f, 0.72f)
+            )
+        )
+        val profile = CalibrationProfile(
+            id = "game_heartopia",
+            name = "心动小镇 36键",
+            keyboardMode = KeyboardMode.KEYS_36,
+            grid = manualGrid
+        )
+        val restored = CalibrationProfile.fromJson(profile.toJson())
+        assertTrue(restored != null)
+        assertEquals("心动小镇 36键", restored!!.name)
+        assertEquals(KeyboardMode.KEYS_36, restored.keyboardMode)
+        assertEquals(CalibrationMethod.MANUAL_PICK, restored.grid.calibrationMethod)
+
+        val (nx, ny) = restored.grid.keyNorm("L2#")
+        assertEquals(0.24f, nx, 0.0001f)
+        assertEquals(0.72f, ny, 0.0001f)
     }
 }

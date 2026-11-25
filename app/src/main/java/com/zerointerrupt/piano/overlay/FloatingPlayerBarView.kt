@@ -16,6 +16,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import com.zerointerrupt.piano.model.CalibrationMethod
+import com.zerointerrupt.piano.model.CalibrationProfile
 import com.zerointerrupt.piano.model.KeyboardMode
 import com.zerointerrupt.piano.model.PianoScore
 import com.zerointerrupt.piano.model.PianoSettings
@@ -39,6 +41,8 @@ class FloatingPlayerBarView(
     private val onAdjustSpeed: (newSpeed: Float) -> Unit,
     private val onSelectScore: (scoreId: String) -> Unit,
     private val onOpenCalibration: () -> Unit,
+    private val onOpenManualCalibration: () -> Unit = {},
+    private val onSelectCalibrationProfile: (profileId: String) -> Unit = {},
     private val onCloseOverlay: () -> Unit,
     private val onSizeChangedHint: () -> Unit = {},
     private val onToggleKeyboardMode: (() -> Unit)? = null
@@ -60,11 +64,15 @@ class FloatingPlayerBarView(
     private var palette: OverlayMd3Palette = initialPalette
     private var collapsed = false
     private var pickerExpanded = false
+    private var calPanelExpanded = false
     private var currentSpeed = 1.0f
     private var currentScores: List<PianoScore> = emptyList()
     private var currentSelectedScoreId: String? = null
+    private var currentProfiles: List<CalibrationProfile> = emptyList()
+    private var currentActiveProfileId: String? = null
     private var lastSnapshot: PlaybackSnapshot = PlaybackSnapshot()
     private var lastPickerSignature: String = ""
+    private var lastCalSignature: String = ""
 
     private val expandedContainer: LinearLayout
     private val collapsedPill: TextView
@@ -95,6 +103,13 @@ class FloatingPlayerBarView(
     private val prevScoreBtn: TextView
     private val nextScoreBtn: TextView
     private val scoreListContainer: LinearLayout
+
+    private val calSection: LinearLayout
+    private val calDivider: View
+    private val calHeaderTitle: TextView
+    private val calGridLaunchBtn: TextView
+    private val calManualLaunchBtn: TextView
+    private val calProfileListContainer: LinearLayout
 
     init {
         orientation = VERTICAL
@@ -259,7 +274,7 @@ class FloatingPlayerBarView(
         }
 
         calBtn = makeActionBtn("校准") {
-            onOpenCalibration()
+            setCalPanelExpanded(!calPanelExpanded)
         }.apply {
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, dp(34f)).apply {
                 marginStart = dp(6f)
@@ -339,11 +354,74 @@ class FloatingPlayerBarView(
         pickerSection.addView(pickerHeaderRow)
         pickerSection.addView(scoreScroll)
 
+        // Expandable Calibration Mode & Saved Profiles Drawer
+        calSection = LinearLayout(context).apply {
+            orientation = VERTICAL
+            visibility = View.GONE
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(8f)
+            }
+        }
+
+        calDivider = View(context).apply {
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dp(1f)).apply {
+                bottomMargin = dp(8f)
+            }
+        }
+
+        val calHeaderRow = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(6f)
+            }
+        }
+
+        calHeaderTitle = TextView(context).apply {
+            text = "校准方案"
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        calGridLaunchBtn = makeMiniChip("网格校准") {
+            setCalPanelExpanded(false)
+            onOpenCalibration()
+        }
+
+        calManualLaunchBtn = makeMiniChip("手动拾取") {
+            setCalPanelExpanded(false)
+            onOpenManualCalibration()
+        }.apply {
+            (layoutParams as MarginLayoutParams).marginStart = dp(6f)
+        }
+
+        calHeaderRow.addView(calHeaderTitle)
+        calHeaderRow.addView(calGridLaunchBtn)
+        calHeaderRow.addView(calManualLaunchBtn)
+
+        calProfileListContainer = LinearLayout(context).apply {
+            orientation = VERTICAL
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        }
+
+        val calProfileScroll = MaxHeightScrollView(context, dp(152f)).apply {
+            isVerticalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            addView(calProfileListContainer)
+        }
+
+        calSection.addView(calDivider)
+        calSection.addView(calHeaderRow)
+        calSection.addView(calProfileScroll)
+
         expandedContainer.addView(topRow)
         expandedContainer.addView(progressBar)
         expandedContainer.addView(errorView)
         expandedContainer.addView(ctrlRow)
         expandedContainer.addView(pickerSection)
+        expandedContainer.addView(calSection)
 
         collapsedPill = TextView(context).apply {
             text = "1.0x"
@@ -404,6 +482,8 @@ class FloatingPlayerBarView(
         if (collapsed) {
             pickerExpanded = false
             pickerSection.visibility = View.GONE
+            calPanelExpanded = false
+            calSection.visibility = View.GONE
             updateTitleChevronIcon()
         }
         expandedContainer.visibility = if (collapsed) View.GONE else View.VISIBLE
@@ -414,10 +494,28 @@ class FloatingPlayerBarView(
 
     private fun setPickerExpanded(value: Boolean) {
         pickerExpanded = value
+        if (pickerExpanded) {
+            calPanelExpanded = false
+            calSection.visibility = View.GONE
+        }
         pickerSection.visibility = if (pickerExpanded) View.VISIBLE else View.GONE
         updateTitleChevronIcon()
         if (pickerExpanded) {
             rebuildScoreListIfNeeded(force = false)
+        }
+        onSizeChangedHint()
+    }
+
+    private fun setCalPanelExpanded(value: Boolean) {
+        calPanelExpanded = value
+        if (calPanelExpanded) {
+            pickerExpanded = false
+            pickerSection.visibility = View.GONE
+            updateTitleChevronIcon()
+        }
+        calSection.visibility = if (calPanelExpanded) View.VISIBLE else View.GONE
+        if (calPanelExpanded) {
+            rebuildCalProfileListIfNeeded(force = false)
         }
         onSizeChangedHint()
     }
@@ -559,6 +657,23 @@ class FloatingPlayerBarView(
             rippleAlpha = rippleAlpha
         )
 
+        calDivider.setBackgroundColor(OverlayMd3Palette.withAlpha(palette.outlineVariant, 150))
+        calHeaderTitle.setTextColor(palette.onSurfaceVariant)
+        calGridLaunchBtn.setTextColor(palette.onSecondaryContainer)
+        calGridLaunchBtn.background = OverlayMd3Palette.createRipplePill(
+            bgColor = palette.secondaryContainer,
+            rippleColor = palette.onSecondaryContainer,
+            radiusPx = dp(999f).toFloat(),
+            rippleAlpha = rippleAlpha
+        )
+        calManualLaunchBtn.setTextColor(palette.onPrimary)
+        calManualLaunchBtn.background = OverlayMd3Palette.createRipplePill(
+            bgColor = palette.primary,
+            rippleColor = palette.onPrimary,
+            radiusPx = dp(999f).toFloat(),
+            rippleAlpha = rippleAlpha
+        )
+
         collapsedPill.setTextColor(palette.onPrimaryContainer)
         collapsedPill.background = OverlayMd3Palette.createRipplePill(
             bgColor = Color.TRANSPARENT,
@@ -574,6 +689,11 @@ class FloatingPlayerBarView(
             rebuildScoreListIfNeeded(force = true)
         } else {
             lastPickerSignature = ""
+        }
+        if (calPanelExpanded) {
+            rebuildCalProfileListIfNeeded(force = true)
+        } else {
+            lastCalSignature = ""
         }
     }
 
@@ -638,16 +758,21 @@ class FloatingPlayerBarView(
         scores: List<PianoScore>,
         selectedScore: PianoScore?,
         snapshot: PlaybackSnapshot,
-        keyboardMode: KeyboardMode = KeyboardMode.KEYS_21
+        keyboardMode: KeyboardMode = KeyboardMode.KEYS_21,
+        profiles: List<CalibrationProfile> = currentProfiles,
+        activeProfileId: String? = currentActiveProfileId
     ) {
         val prevStatus = lastSnapshot.status
         lastSnapshot = snapshot
         currentScores = scores
         currentSelectedScoreId = selectedScore?.id
         currentSpeed = snapshot.speed
+        currentProfiles = profiles
+        currentActiveProfileId = activeProfileId
 
         titleView.text = selectedScore?.title ?: "未选择曲目"
         pickerHeaderTitle.text = "切换曲目 (${scores.size})"
+        calHeaderTitle.text = "校准方案 (${profiles.size})"
         modeChip.text = if (keyboardMode == KeyboardMode.KEYS_36) "36键目录 ⇄" else "21键目录 ⇄"
 
         val curSec = ((snapshot.positionMs / currentSpeed) / 1000f).roundToInt().coerceAtLeast(0)
@@ -685,6 +810,79 @@ class FloatingPlayerBarView(
 
         if (pickerExpanded) {
             rebuildScoreListIfNeeded(force = false)
+        }
+        if (calPanelExpanded) {
+            rebuildCalProfileListIfNeeded(force = false)
+        }
+    }
+
+    private fun rebuildCalProfileListIfNeeded(force: Boolean) {
+        val sig = buildString {
+            append(palette.hashCode()).append('|')
+            append(currentActiveProfileId.orEmpty()).append('|')
+            for (p in currentProfiles) {
+                append(p.id).append(':').append(p.name).append(':').append(p.keyboardMode.name)
+                    .append(':').append(p.grid.calibrationMethod.name).append(',')
+            }
+        }
+        if (!force && sig == lastCalSignature) return
+        lastCalSignature = sig
+
+        calProfileListContainer.removeAllViews()
+        val rippleAlpha = if (palette.isDark) 84 else 68
+        currentProfiles.forEachIndexed { idx, profile ->
+            val selected = profile.id == currentActiveProfileId
+            val row = LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                isClickable = true
+                setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
+                background = OverlayMd3Palette.createRipplePill(
+                    bgColor = if (selected) palette.primaryContainer else palette.surfaceContainerLow,
+                    rippleColor = palette.primary,
+                    radiusPx = dp(14f).toFloat(),
+                    strokeColor = if (selected) palette.primary else Color.TRANSPARENT,
+                    strokeWidthPx = if (selected) dp(1f) else 0,
+                    rippleAlpha = rippleAlpha
+                )
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    if (idx > 0) topMargin = dp(5f)
+                }
+                setOnClickListener {
+                    onSelectCalibrationProfile(profile.id)
+                    setCalPanelExpanded(false)
+                }
+            }
+
+            val nameTv = TextView(context).apply {
+                text = if (selected) "✓ ${profile.name}" else profile.name
+                textSize = 12.5f
+                typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                setTextColor(if (selected) palette.onPrimaryContainer else palette.onSurface)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val badgeText = "${profile.keyboardMode.label}·${if (profile.grid.calibrationMethod == CalibrationMethod.MANUAL_PICK) "手动" else "网格"}"
+            val badgeTv = TextView(context).apply {
+                text = badgeText
+                textSize = 10f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(7f), dp(2.5f), dp(7f), dp(2.5f))
+                setTextColor(if (selected) palette.onPrimary else palette.onSecondaryContainer)
+                background = GradientDrawable().apply {
+                    setColor(if (selected) palette.primary else palette.secondaryContainer)
+                    cornerRadius = dp(999f).toFloat()
+                }
+                layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(8f)
+                }
+            }
+
+            row.addView(nameTv)
+            row.addView(badgeTv)
+            calProfileListContainer.addView(row)
         }
     }
 

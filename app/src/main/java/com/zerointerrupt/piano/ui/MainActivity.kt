@@ -81,6 +81,8 @@ class MainActivity : ComponentActivity() {
             val selectedScore by PianoPlayerEngine.selectedScore.collectAsState()
             val settings by PianoPlayerEngine.settings.collectAsState()
             val calibration by PianoPlayerEngine.calibration.collectAsState()
+            val calibrationProfiles by PianoPlayerEngine.calibrationProfiles.collectAsState()
+            val activeCalibrationProfileId by PianoPlayerEngine.activeCalibrationProfileId.collectAsState()
             val playback by PianoPlayerEngine.playback.collectAsState()
             val probe by PianoPlayerEngine.probeState.collectAsState()
             val overlayMode by PianoPlayerEngine.overlayMode.collectAsState()
@@ -104,6 +106,32 @@ class MainActivity : ComponentActivity() {
                     onSeek = { pos -> PianoPlayerEngine.seekTo(pos) },
                     onSpeedChange = { sp -> PianoPlayerEngine.setSpeed(sp) },
                     onOpenCalibrationOverlay = { launchOverlayAction(PianoOverlayService.ACTION_SHOW_CALIBRATION) },
+                    onOpenManualCalibrationOverlay = { launchOverlayAction(PianoOverlayService.ACTION_SHOW_MANUAL_CALIBRATION) },
+                    onSelectCalibrationProfile = { profileId ->
+                        val switched = PianoPlayerEngine.selectCalibrationProfile(profileId)
+                        if (switched != null) {
+                            scope.launch {
+                                snackbarHostState.showSnackbar("已切换至校准方案「${switched.name}」(${switched.keyboardMode.label})")
+                            }
+                        }
+                    },
+                    onCreateCalibrationProfile = { name, copyCurrent ->
+                        val created = PianoPlayerEngine.createCalibrationProfile(
+                            name = name,
+                            copyFromActive = copyCurrent,
+                            keyboardMode = PianoPlayerEngine.settings.value.keyboardMode
+                        )
+                        scope.launch { snackbarHostState.showSnackbar("已创建并切换至方案「${created.name}」") }
+                    },
+                    onRenameCalibrationProfile = { profileId, newName ->
+                        PianoPlayerEngine.renameCalibrationProfile(profileId, newName)
+                        scope.launch { snackbarHostState.showSnackbar("已重命名为「${newName.trim()}」") }
+                    },
+                    onDeleteCalibrationProfile = { profileId ->
+                        if (PianoPlayerEngine.deleteCalibrationProfile(profileId)) {
+                            scope.launch { snackbarHostState.showSnackbar("已删除校准方案") }
+                        }
+                    },
                     onTogglePlayerOverlay = {
                         if (PianoPlayerEngine.overlayMode.value == OverlayMode.OFF) {
                             launchOverlayAction(PianoOverlayService.ACTION_SHOW_PLAYER)
@@ -214,6 +242,8 @@ class MainActivity : ComponentActivity() {
                     selectedScore = selectedScore,
                     settings = settings,
                     calibration = calibration,
+                    calibrationProfiles = calibrationProfiles,
+                    activeCalibrationProfileId = activeCalibrationProfileId,
                     playback = playback,
                     probe = probe,
                     overlayMode = overlayMode,

@@ -12,6 +12,8 @@ object PianoConfigStore {
     private const val KEY_CAL_TOP = "cal_top"
     private const val KEY_CAL_RIGHT = "cal_right"
     private const val KEY_CAL_BOTTOM = "cal_bottom"
+    private const val KEY_CAL_PROFILES_JSON = "cal_profiles_json"
+    private const val KEY_ACTIVE_CAL_PROFILE_ID = "active_cal_profile_id"
 
     private const val KEY_RPC_HOST = "rpc_host"
     private const val KEY_RPC_PORT = "rpc_port"
@@ -99,6 +101,56 @@ object PianoConfigStore {
             .putFloat(KEY_CAL_TOP, c.topNorm)
             .putFloat(KEY_CAL_RIGHT, c.rightNorm)
             .putFloat(KEY_CAL_BOTTOM, c.bottomNorm)
+            .apply()
+    }
+
+    fun loadCalibrationProfiles(context: Context): List<CalibrationProfile> {
+        val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val raw = p.getString(KEY_CAL_PROFILES_JSON, null)
+        val parsed = mutableListOf<CalibrationProfile>()
+        if (!raw.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    CalibrationProfile.fromJson(arr.optJSONObject(i))?.let { parsed += it }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        if (parsed.isNotEmpty()) return parsed
+
+        // Migrate legacy single CalibrationGrid into default named profile
+        val legacyGrid = loadCalibration(context)
+        val settingsMode = KeyboardMode.fromStorageName(p.getString(KEY_KEYBOARD_MODE, KeyboardMode.KEYS_21.name))
+        val defaultProfile = CalibrationProfile(
+            id = CalibrationProfile.DEFAULT_PROFILE_ID,
+            name = CalibrationProfile.DEFAULT_PROFILE_NAME,
+            keyboardMode = settingsMode,
+            grid = legacyGrid
+        )
+        saveCalibrationProfiles(context, listOf(defaultProfile))
+        saveActiveCalibrationProfileId(context, defaultProfile.id)
+        return listOf(defaultProfile)
+    }
+
+    fun saveCalibrationProfiles(context: Context, profiles: List<CalibrationProfile>) {
+        val arr = JSONArray()
+        profiles.forEach { arr.put(it.toJson()) }
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_CAL_PROFILES_JSON, arr.toString())
+            .apply()
+    }
+
+    fun loadActiveCalibrationProfileId(context: Context): String {
+        val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        return p.getString(KEY_ACTIVE_CAL_PROFILE_ID, CalibrationProfile.DEFAULT_PROFILE_ID)
+            .orEmpty()
+            .ifBlank { CalibrationProfile.DEFAULT_PROFILE_ID }
+    }
+
+    fun saveActiveCalibrationProfileId(context: Context, profileId: String) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_ACTIVE_CAL_PROFILE_ID, profileId)
             .apply()
     }
 

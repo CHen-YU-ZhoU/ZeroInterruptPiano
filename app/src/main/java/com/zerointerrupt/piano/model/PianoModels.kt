@@ -5,18 +5,36 @@ import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+enum class CalibrationMethod(val label: String) {
+    GRID("网格框选"),
+    MANUAL_PICK("手动拾取");
+
+    companion object {
+        fun fromStorageName(raw: String?): CalibrationMethod =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: GRID
+    }
+}
+
 /**
- * Normalized 3x7 piano bounding box (0..1 relative to full screen dimensions).
+ * Normalized 3x7 / 36-key piano calibration data (0..1 relative to full screen dimensions).
+ * Supports both bounding-box grid interpolation (GRID) and explicit per-key coordinates (MANUAL_PICK).
  * Default values match M0 hardware calibration on 2712x1220 landscape display.
  */
 data class CalibrationGrid(
     val leftNorm: Float = DEFAULT_LEFT_NORM,
     val topNorm: Float = DEFAULT_TOP_NORM,
     val rightNorm: Float = DEFAULT_RIGHT_NORM,
-    val bottomNorm: Float = DEFAULT_BOTTOM_NORM
+    val bottomNorm: Float = DEFAULT_BOTTOM_NORM,
+    val calibrationMethod: CalibrationMethod = CalibrationMethod.GRID,
+    val manualPoints: Map<String, Pair<Float, Float>> = emptyMap()
 ) {
     fun keyNorm(keyId: String): Pair<Float, Float> {
-        val clean = keyId.trim().uppercase()
+        val clean = normalizeKeyId(keyId)
+        if (calibrationMethod == CalibrationMethod.MANUAL_PICK) {
+            manualPoints[clean]?.let { (mx, my) ->
+                return Pair(mx.coerceIn(0.01f, 0.99f), my.coerceIn(0.01f, 0.99f))
+            }
+        }
         val rowIdx = when (clean.firstOrNull()) {
             'H' -> 0
             'M' -> 1
@@ -53,7 +71,26 @@ data class CalibrationGrid(
         val t = topNorm.coerceIn(0.01f, 1f - minH)
         val r = rightNorm.coerceIn(l + minW, 0.99f)
         val b = bottomNorm.coerceIn(t + minH, 0.99f)
-        return CalibrationGrid(l, t, r, b)
+        val cleanPoints = manualPoints.entries.associate { (k, pt) ->
+            normalizeKeyId(k) to Pair(pt.first.coerceIn(0.01f, 0.99f), pt.second.coerceIn(0.01f, 0.99f))
+        }
+        return CalibrationGrid(l, t, r, b, calibrationMethod, cleanPoints)
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("leftNorm", leftNorm.toDouble())
+        put("topNorm", topNorm.toDouble())
+        put("rightNorm", rightNorm.toDouble())
+        put("bottomNorm", bottomNorm.toDouble())
+        put("calibrationMethod", calibrationMethod.name)
+        val ptsObj = JSONObject()
+        for ((k, pt) in manualPoints) {
+            ptsObj.put(normalizeKeyId(k), JSONArray().apply {
+                put(pt.first.toDouble())
+                put(pt.second.toDouble())
+            })
+        }
+        put("manualPoints", ptsObj)
     }
 
     companion object {
@@ -70,6 +107,161 @@ data class CalibrationGrid(
 
         val ALL_KEYS_36: List<String> = listOf("H", "M", "L").flatMap { r ->
             (1..7).map { c -> "$r$c" } + BLACK_KEY_DEGREES.map { d -> "$r${d}S" }
+        }
+
+        private val CHROMATIC_ORDER = listOf(
+            "1", "1S", "2", "2S", "3", "4", "4S", "5", "5S", "6", "6S", "7"
+        )
+
+        /** Low-to-high natural key sequence (21 keys): L1..L7 -> M1..M7 -> H1..H7 */
+        val PICK_ORDER_21: List<String> = listOf("L", "M", "H").flatMap { oct ->
+            (1..7).map { d -> "$oct$d" }
+        }
+
+        /** Low-to-high chromatic key sequence (36 keys): L1, L1S, L2, L2S, L3 ... H7 */
+        val PICK_ORDER_36: List<String> = listOf("L", "M", "H").flatMap { oct ->
+            CHROMATIC_ORDER.map { deg -> "$oct$deg" }
+        }
+
+        fun pickOrderFor(mode: KeyboardMode): List<String> =
+            if (mode == KeyboardMode.KEYS_36) PICK_ORDER_36 else PICK_ORDER_21
+
+        fun normalizeKeyId(keyId: String): String =
+            keyId.trim().uppercase().replace("#", "S")
+
+        fun isSharpKey(keyId: String): Boolean {
+            val clean = normalizeKeyId(keyId)
+            return clean.endsWith("S")
+        }
+
+        /** Returns short musical notation like "1", "#1", "2", "#2", "7". */
+        fun formatKeyShort(keyId: String): String {
+            val clean = normalizeKeyId(keyId)
+            val sharp = clean.endsWith("S")
+            val deg = if (sharp) clean.drop(1).dropLast(1) else clean.drop(1)
+            return if (sharp) "#$deg" else deg
+        }
+
+        /** Returns octave label ("低音", "中音", "高音"). */
+        fun octaveLabel(keyId: String): String = when (normalizeKeyId(keyId).firstOrNull()) {
+            'L' -> "低音"
+            'H' -> "高音"
+            else -> "中音"
+        }
+
+        /** Returns user-friendly display label like "低音 1", "低音 #2", "高音 7". */
+        fun formatKeyWithOctave(keyId: String): String =
+            "${octaveLabel(keyId)} ${formatKeyShort(keyId)}"
+
+        /** Returns compact marker badge text like "L1", "L#2", "M5", "H#6". */
+        fun formatKeyCompactBadge(keyId: String): String {
+            val clean = normalizeKeyId(keyId)
+            val prefix = clean.firstOrNull()?.toString() ?: "M"
+            return "$prefix${formatKeyShort(clean)}"
+        }
+
+        /** Returns standard pitch name like "C3", "C#3", "D4", "B5". */
+        fun formatKeyPitchName(keyId: String): String {
+            val clean = normalizeKeyId(keyId)
+            val octNum = when (clean.firstOrNull()) {
+                'L' -> 3
+                'H' -> 5
+                else -> 4
+            }
+            val sharp = clean.endsWith("S")
+            val deg = (if (sharp) clean.drop(1).dropLast(1) else clean.drop(1)).toIntOrNull() ?: 1
+            val letter = when (deg) {
+                1 -> "C"
+                2 -> "D"
+                3 -> "E"
+                4 -> "F"
+                5 -> "G"
+                6 -> "A"
+                7 -> "B"
+                else -> "C"
+            }
+            return if (sharp) "$letter#$octNum" else "$letter$octNum"
+        }
+
+        fun fromJson(obj: JSONObject?): CalibrationGrid {
+            if (obj == null) return CalibrationGrid()
+            val method = CalibrationMethod.fromStorageName(obj.optString("calibrationMethod", CalibrationMethod.GRID.name))
+            val pts = LinkedHashMap<String, Pair<Float, Float>>()
+            val ptsObj = obj.optJSONObject("manualPoints")
+            if (ptsObj != null) {
+                val keys = ptsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val arr = ptsObj.optJSONArray(k)
+                    if (arr != null && arr.length() >= 2) {
+                        val x = arr.optDouble(0, Double.NaN)
+                        val y = arr.optDouble(1, Double.NaN)
+                        if (!x.isNaN() && !y.isNaN()) {
+                            pts[normalizeKeyId(k)] = Pair(x.toFloat(), y.toFloat())
+                        }
+                    }
+                }
+            }
+            return CalibrationGrid(
+                leftNorm = obj.optDouble("leftNorm", DEFAULT_LEFT_NORM.toDouble()).toFloat(),
+                topNorm = obj.optDouble("topNorm", DEFAULT_TOP_NORM.toDouble()).toFloat(),
+                rightNorm = obj.optDouble("rightNorm", DEFAULT_RIGHT_NORM.toDouble()).toFloat(),
+                bottomNorm = obj.optDouble("bottomNorm", DEFAULT_BOTTOM_NORM.toDouble()).toFloat(),
+                calibrationMethod = method,
+                manualPoints = pts
+            ).clamped()
+        }
+    }
+}
+
+/**
+ * Named calibration profile allowing users to save & quickly switch between different games' piano layouts.
+ */
+data class CalibrationProfile(
+    val id: String,
+    val name: String,
+    val keyboardMode: KeyboardMode = KeyboardMode.KEYS_21,
+    val grid: CalibrationGrid = CalibrationGrid(),
+    val updatedAtMs: Long = System.currentTimeMillis()
+) {
+    fun summaryText(): String {
+        return if (grid.calibrationMethod == CalibrationMethod.MANUAL_PICK) {
+            val expected = keyboardMode.keyCount
+            val picked = grid.manualPoints.keys.count { it in CalibrationGrid.pickOrderFor(keyboardMode) }
+            "手动拾取 · 已校准 $picked/$expected 键"
+        } else {
+            "网格框选 · L=%.3f T=%.3f R=%.3f B=%.3f".format(
+                grid.leftNorm, grid.topNorm, grid.rightNorm, grid.bottomNorm
+            )
+        }
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("name", name)
+        put("keyboardMode", keyboardMode.name)
+        put("grid", grid.toJson())
+        put("updatedAtMs", updatedAtMs)
+    }
+
+    companion object {
+        const val DEFAULT_PROFILE_ID = "default_profile"
+        const val DEFAULT_PROFILE_NAME = "默认布局"
+
+        fun fromJson(obj: JSONObject?): CalibrationProfile? {
+            if (obj == null) return null
+            val id = obj.optString("id", "").ifBlank { return null }
+            val name = obj.optString("name", "").ifBlank { DEFAULT_PROFILE_NAME }
+            val mode = KeyboardMode.fromStorageName(obj.optString("keyboardMode", KeyboardMode.KEYS_21.name))
+            val grid = CalibrationGrid.fromJson(obj.optJSONObject("grid"))
+            val updatedAt = obj.optLong("updatedAtMs", System.currentTimeMillis())
+            return CalibrationProfile(
+                id = id,
+                name = name,
+                keyboardMode = mode,
+                grid = grid,
+                updatedAtMs = updatedAt
+            )
         }
     }
 }
