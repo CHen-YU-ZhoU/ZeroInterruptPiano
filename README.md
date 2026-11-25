@@ -20,7 +20,7 @@
 本软件依赖 **ZeroInterruptClicker（零断触连点器）** 与 **Shizuku** 提供底层触控注入能力，首次使用请按以下步骤完成连接：
 
 1. **配置连点器**：
-   - 安装并打开 **ZeroInterruptClicker**，完成悬浮窗权限、Shizuku 授权与触控校准。
+   - 前往 [ZeroInterruptClicker（零断触连点器）](https://github.com/CHen-YU-ZhoU/ZeroInterruptClicker) 下载安装并打开，完成悬浮窗权限、Shizuku 授权与触控校准。
 2. **开启连点器专业模式并获取 RPC Token**：
    - 在连点器中切换到 **「实验室」** 页面；
    - 连续点击底部的 **「版本号」7 次**，展开 **「专业模式」**；
